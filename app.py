@@ -1,24 +1,32 @@
 import streamlit as st
 import numpy as np
-import re  # Pastikan 're' (Regular Expressions) diimpor
+import re
 import joblib
 from gensim.models import Word2Vec
 from keras.models import load_model
 from tensorflow.keras.utils import pad_sequences
 
-# --- PENGATURAN HALAMAN APLIKASI ---
-st.set_page_config(
-    page_title="Prediksi Tag Teks Hukum",
-    page_icon="⚖️",
-    layout="centered"
-)
+# --- (BARU) PETA NAMA TAG ---
+# Peta untuk menerjemahkan tag internal (DEFN) ke nama yang mudah dibaca
+TAG_MAP = {
+    'ADVO': 'Advokat/Pengacara',
+    'ARTV': 'Pasal/Artikel Hukum',
+    'CRIA': 'Tindak Pidana',
+    'DEFN': 'Identitas Terdakwa/Tergugat',
+    'JUDG': 'Hakim',
+    'JUDP': 'Institusi Pengadilan',
+    'PENA': 'Jaksa Penuntut Umum', # Asumsi dari 'Penuntut'
+    'PROS': 'Jaksa Penuntut Umum', # Asumsi dari 'Prosecutor'
+    'PUNI': 'Hukuman/Pidana',
+    'REGI': 'Nomor Registrasi',
+    'TIMV': 'Durasi Waktu',
+    'VERN': 'Vonis/Putusan',
+    # Tambahkan tag lain jika ada
+}
+
 
 # --- FUNGSI HELPER UNTUK EMBEDDING ---
 def get_word_embedding(word, model_wv, vector_size):
-    """
-    Helper untuk mendapatkan embedding dari cbow_model.
-    Jika kata tidak ditemukan, kembalikan vektor nol.
-    """
     if word in model_wv:
         return model_wv[word]
     else:
@@ -27,21 +35,11 @@ def get_word_embedding(word, model_wv, vector_size):
 # --- FUNGSI UNTUK MEMUAT SEMUA MODEL ---
 @st.cache_resource
 def load_all_models():
-    """
-    Memuat semua model dan data yang disimpan dari disk.
-    Menggunakan cache Streamlit agar hanya dimuat sekali.
-    """
     try:
-        # 1. Muat model Keras
         model = load_model('model_bilstm_pidana.h5')
-        
-        # 2. Muat model Word2Vec (gensim)
         cbow_model = Word2Vec.load('cbow_pidana.model')
-        
-        # 3. Muat data pendukung (kamus tag, dll)
         app_data = joblib.load('app_data.pkl')
         
-        # Kembalikan semua dalam satu dictionary
         return {
             "model": model,
             "cbow_model": cbow_model,
@@ -56,51 +54,36 @@ def load_all_models():
         st.error(f"Terjadi error saat memuat model: {e}")
         return None
 
-# --- FUNGSI PREDIKSI UTAMA (YANG SUDAH DIMODIFIKASI) ---
+# --- FUNGSI PREDIKSI TAG (Tidak Berubah) ---
 def predict_sentence_tags(raw_text, assets):
-    """
-    Fungsi lengkap untuk memproses teks mentah menjadi prediksi.
-    (VERSI DIPERBARUI DENGAN TOKENISASI YANG LEBIH BAIK)
-    """
     try:
-        # 1. Unpack semua model dan data dari 'assets'
         keras_model = assets['model']
         cbow_model = assets['cbow_model']
         tag_map = assets['idx2tag']
         max_len = assets['MAX_LEN']
         embedding_size = assets['vector_size']
         
-        # 2. Preprocessing Teks
         cleaned_text = raw_text.lower()
-        cleaned_text = re.sub(r'[\d]', 'X', cleaned_text) # Mengganti semua digit dengan 'X'
+        cleaned_text = re.sub(r'[\d]', 'X', cleaned_text)
         
-        # --- PERBAIKAN UTAMA ADA DI SINI ---
-        # Gunakan regex untuk memisahkan kata DAN tanda baca
-        # Ini akan mengubah "sukiman," menjadi ["sukiman", ","]
         words = re.findall(r"[\w']+|[.,!?;:]", cleaned_text)
-        # ------------------------------------
         
         if not words:
             return "Input kosong. Silakan masukkan kalimat."
             
-        # 3. Konversi Kata menjadi Embedding (Word2Vec)
         X_new = [[get_word_embedding(w, cbow_model.wv, embedding_size) for w in words]]
         
-        # 4. Lakukan Padding
         X_new = pad_sequences(maxlen=max_len, 
                               sequences=X_new, 
                               padding="post", 
                               dtype='float32', 
                               value=np.zeros(embedding_size))
         
-        # 5. Lakukan Prediksi dengan Model Keras
         p = keras_model.predict(X_new)
         p = np.argmax(p, axis=-1)
         
-        # 6. Format Output (Ubah indeks tag kembali ke teks)
         results = []
         for i in range(len(words)):
-            # Perlakuan khusus: Jika token adalah tanda baca, tag-nya 'O'
             if words[i] in [",", ".", ":", ";", "!", "?"]:
                 tag = "O"
             else:
@@ -115,42 +98,108 @@ def predict_sentence_tags(raw_text, assets):
         st.error(f"Terjadi Error saat prediksi: {str(e)}")
         return None
 
-# --- MEMBANGUN ANTARMUKA APLIKASI STREAMLIT ---
+# --- (FUNGSI BARU) EKSTRAKSI ENTITAS ---
+def extract_entities(predictions):
+    """
+    Mengambil daftar (kata, tag) dan merakitnya menjadi entitas yang utuh.
+    Contoh: (terdakwa, B_DEFN), (budi, I_DEFN) -> DEFN: ["terdakwa budi"]
+    """
+    entities = {}
+    current_entity_words = []
+    current_entity_tag = None
 
-# 1. Muat semua model saat aplikasi dimulai
+    for word, tag in predictions:
+        if tag.startswith('B_'):
+            # Jika ada entitas sebelumnya, simpan
+            if current_entity_tag:
+                entity_text = " ".join(current_entity_words)
+                if current_entity_tag not in entities:
+                    entities[current_entity_tag] = []
+                entities[current_entity_tag].append(entity_text)
+            
+            # Mulai entitas baru
+            current_entity_words = [word]
+            current_entity_tag = tag.split('_', 1)[1] # Ambil 'DEFN' dari 'B_DEFN'
+        
+        elif tag.startswith('I_'):
+            # Lanjutkan entitas jika tag-nya cocok
+            if current_entity_tag and tag.split('_', 1)[1] == current_entity_tag:
+                current_entity_words.append(word)
+            else:
+                # Jika tag 'I_' tidak cocok (atau muncul tanpa 'B_'), abaikan
+                pass
+        
+        else: # (Tag 'O' atau lainnya)
+            # Jika ada entitas yang sedang dibangun, simpan
+            if current_entity_tag:
+                entity_text = " ".join(current_entity_words)
+                if current_entity_tag not in entities:
+                    entities[current_entity_tag] = []
+                entities[current_entity_tag].append(entity_text)
+            
+            # Reset
+            current_entity_words = []
+            current_entity_tag = None
+
+    # Simpan entitas terakhir setelah loop selesai
+    if current_entity_tag:
+        entity_text = " ".join(current_entity_words)
+        if current_entity_tag not in entities:
+            entities[current_entity_tag] = []
+        entities[current_entity_tag].append(entity_text)
+
+    return entities
+
+
+# --- (MODIFIKASI) ANTARMUKA APLIKASI STREAMLIT ---
+
 assets = load_all_models()
 
-# 2. Tampilkan Judul dan Subjudul
-st.title("⚖️ Aplikasi Prediksi Tag Entitas Hukum")
+st.title("⚖️ Aplikasi Ekstraksi Informasi Teks Hukum")
 st.subheader("Dibangun dengan Bi-LSTM dan Streamlit")
-st.markdown("Aplikasi ini dapat mengenali entitas dalam teks hukum (misal: terdakwa, pasal, hukuman) berdasarkan model yang dilatih pada 200 putusan pidana.")
+st.markdown("Aplikasi ini melakukan **Ekstraksi Informasi** (Tahap 2) dengan cara memprediksi *tag* entitas (Tahap 1) dan kemudian merakitnya menjadi informasi yang utuh.")
 
-# 3. Hanya tampilkan UI jika model berhasil dimuat
 if assets: 
-    # 4. Buat area input teks
     input_text = st.text_area(
         "Masukkan kalimat teks hukum di sini:",
         "Bahwa terdakwa Budi Hartono alias Bodong bin Sukiman, didampingi oleh Penasihat Hukumnya, Dr. Sinar Pagi, S.H., M.H., telah terbukti secara sah dan meyakinkan bersalah melakukan tindak pidana pencurian dengan pemberatan sebagaimana diatur dalam Pasal 363 ayat (1) KUHP, dan oleh karenanya Majelis Hakim menjatuhkan pidana penjara selama 1 (satu) tahun dan 6 (enam) bulan.",
         height=150
     )
 
-    # 5. Buat tombol untuk memulai prediksi
-    if st.button("Prediksi Tag"):
+    if st.button("Ekstrak Informasi"):
         if input_text:
-            # Tampilkan spinner selagi model bekerja
-            with st.spinner("Sedang memprediksi..."):
+            with st.spinner("Sedang memprediksi tag..."):
+                # TAHAP 1: PREDIKSI TAG
                 predictions = predict_sentence_tags(input_text, assets)
             
-            # 6. Tampilkan hasil jika prediksi berhasil
             if predictions:
-                st.success("Prediksi Selesai!")
+                with st.spinner("Sedang merakit entitas..."):
+                    # TAHAP 2: EKSTRAKSI ENTITAS
+                    entities = extract_entities(predictions)
                 
-                # Format hasil sebagai tabel markdown
-                output_md = "**Hasil Prediksi:**\n\n| Kata | Tag |\n| :--- | :--- |\n"
-                for word, tag in predictions:
-                    # Tambahkan bold pada tag agar mudah dibaca
-                    output_md += f"| {word} | **{tag}** |\n"
+                st.success("Ekstraksi Selesai!")
                 
-                st.markdown(output_md)
+                # --- (BARU) TAMPILKAN HASIL EKSTRAKSI ---
+                st.subheader("Informasi Entitas yang Diekstraksi:")
+                
+                if not entities:
+                    st.warning("Tidak ada entitas yang ditemukan.")
+                else:
+                    # Tampilkan entitas yang diekstrak dengan rapi
+                    for entity_type, entity_list in entities.items():
+                        # Gunakan nama yang mudah dibaca dari TAG_MAP
+                        friendly_name = TAG_MAP.get(entity_type, entity_type)
+                        
+                        st.markdown(f"**{friendly_name}:**")
+                        for entity in entity_list:
+                            # Tampilkan hasil ekstraksi dalam kotak info
+                            st.info(f"{entity}")
+                
+                # --- TAMPILKAN HASIL TAGGING MENTAH DI DALAM EXPAΝDER ---
+                with st.expander("Lihat Rincian Tag per Kata (Hasil Tahap 1)"):
+                    output_md = "| Kata | Tag |\n| :--- | :--- |\n"
+                    for word, tag in predictions:
+                        output_md += f"| {word} | **{tag}** |\n"
+                    st.markdown(output_md)
         else:
             st.warning("Silakan masukkan teks terlebih dahulu.")
