@@ -1,15 +1,5 @@
-tensorflow==2.15.0
-keras==2.15.0
+streamlit
+tensorflow
 numpy
 pandas
 scikit-learn
-nltk
-gensim
-matplotlib
-seaborn
-streamlit
-tqdm
-joblib
-pickle5
-
-
