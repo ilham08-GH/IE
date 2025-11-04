@@ -39,12 +39,12 @@ label_map = {
 # 🔹 PREPROCESS TEKS
 # ==============================================================
 
-def preprocess_text(text: str):
-    """Membersihkan dan mengubah teks menjadi urutan numerik"""
+def preprocess_text(text):
     text = text.lower().strip()
-    seq = tokenizer.texts_to_sequences([text])  # ❌ jangan pakai text.split()
+    seq = tokenizer.texts_to_sequences([text])
     padded = pad_sequences(seq, maxlen=MAX_LEN, padding='post')
-    return padded
+    return np.expand_dims(padded, -1)  # ubah ke (1, 100, 1)
+
 
 # ==============================================================
 # 🔹 FUNGSI PREDIKSI ENTITAS
@@ -113,3 +113,4 @@ if st.button("🔍 Prediksi Entitas"):
 
 st.markdown("---")
 st.caption("🧠 Model: BiLSTM + CBOW | Dibuat untuk analisis teks hukum Indonesia")
+
