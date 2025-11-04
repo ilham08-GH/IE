@@ -6,30 +6,47 @@ import numpy as np
 import pickle
 import os
 from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing.sequence import pad_sequences
 from gensim.models import Word2Vec
 
 # ==============================================================
-# 🔹 LOAD MODEL, TOKENIZER, DAN CBOW EMBEDDING
+# 🔹 FUNGSI LOAD MODEL, TOKENIZER, DAN CBOW
 # ==============================================================
 
 @st.cache_resource
 def load_assets():
-    """Memuat model BiLSTM, tokenizer, dan model CBOW"""
-    model = load_model("ner_bilstm_cbow.keras")
+    """Memuat model BiLSTM, tokenizer, dan CBOW Word2Vec"""
+    base_dir = os.path.dirname(os.path.abspath(__file__))  # pastikan path aman
+
+    model_path = os.path.join(base_dir, "ner_bilstm_cbow.keras")
+    tokenizer_path = os.path.join(base_dir, "tokenizer_ner.pkl")
+    cbow_path = os.path.join(base_dir, "cbow_embedding.model")
+
+    # ✅ Debug info
+    st.sidebar.write("📁 Current directory:", base_dir)
+    st.sidebar.write("📂 Files:", os.listdir(base_dir))
+
+    # Load model
+    if not os.path.exists(model_path):
+        st.stop()
+        st.error(f"❌ File model tidak ditemukan di: {model_path}")
+    model = load_model(model_path)
 
     # Load tokenizer
-    with open("tokenizer_ner.pkl", "rb") as f:
+    if not os.path.exists(tokenizer_path):
+        st.stop()
+        st.error(f"❌ File tokenizer tidak ditemukan di: {tokenizer_path}")
+    with open(tokenizer_path, "rb") as f:
         tokenizer = pickle.load(f)
 
-    # Load CBOW (harus ada, karena input shape 3D)
-    if os.path.exists("cbow_embedding.model"):
-        w2v = Word2Vec.load("cbow_embedding.model")
-    else:
-        st.error("❌ File cbow_embedding.model tidak ditemukan! Pastikan file ada di folder yang sama.")
+    # Load CBOW model
+    if not os.path.exists(cbow_path):
+        st.error(f"❌ File cbow_embedding.model tidak ditemukan di: {cbow_path}")
         w2v = None
+    else:
+        w2v = Word2Vec.load(cbow_path)
 
     return model, tokenizer, w2v
+
 
 model, tokenizer, w2v = load_assets()
 
@@ -107,12 +124,15 @@ st.title("⚖️ Named Entity Recognition (NER) Hukum Indonesia")
 st.markdown(
     """
     Model **BiLSTM + CBOW** untuk mendeteksi entitas dalam teks hukum berbahasa Indonesia 🇮🇩  
-    Pastikan file `cbow_embedding.model`, `ner_bilstm_cbow.keras`, dan `tokenizer_ner.pkl` ada di folder yang sama.
+    Pastikan file berikut ada di folder yang sama:
+    - `ner_bilstm_cbow.keras`
+    - `tokenizer_ner.pkl`
+    - `cbow_embedding.model`
     """
 )
 
 st.sidebar.subheader("🧠 Info Model")
-st.sidebar.write("Input shape model:", model.input_shape)
+st.sidebar.write("Input shape:", model.input_shape)
 st.sidebar.write("Embedding dimensi:", EMBED_DIM)
 
 text_input = st.text_area(
