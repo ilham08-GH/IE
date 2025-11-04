@@ -58,10 +58,19 @@ MAX_LEN = 100
 EMBED_DIM = 10  # harus sama dengan embedding_dim model kamu
 label_map = {
     0: "O",
-    1: "PERSON",
-    2: "LAW",
-    3: "LOCATION",
-    4: "ACTION"
+    1: "B-PER", 2: "I-PER",
+    3: "B-ORG", 4: "I-ORG",
+    5: "B-LOC", 6: "I-LOC",
+    7: "B-LAW", 8: "I-LAW",
+    9: "B-ACT", 10: "I-ACT",
+    11: "B-TIME", 12: "I-TIME",
+    13: "B-MISC", 14: "I-MISC",
+    15: "B-DATE", 16: "I-DATE",
+    17: "B-NUM", 18: "I-NUM",
+    19: "B-PENALTY", 20: "I-PENALTY",
+    21: "B-ARTICLE", 22: "I-ARTICLE",
+    23: "B-EVENT", 24: "I-EVENT",
+    25: "X"
 }
 
 # ==============================================================
@@ -146,20 +155,32 @@ if st.button("🔍 Prediksi Entitas"):
         st.subheader("📊 Hasil Prediksi:")
 
         colors = {
-            "PERSON": "#B3E5FC",
+            "PER": "#B3E5FC",
+            "ORG": "#D1C4E9",
+            "LOC": "#FFF9C4",
             "LAW": "#C8E6C9",
-            "LOCATION": "#FFF9C4",
-            "ACTION": "#F8BBD0"
+            "ACT": "#F8BBD0",
+            "DATE": "#FFECB3",
+            "NUM": "#B2DFDB",
+            "PENALTY": "#FFCDD2",
+            "ARTICLE": "#DCEDC8",
+            "EVENT": "#E1BEE7",
+            "MISC": "#CFD8DC"
         }
+
 
         html_text = ""
         for token, label in entities:
             if label != "O":
-                color = colors.get(label, "#E0E0E0")
-                html_text += f"<span style='background-color:{color}; padding:2px 5px; border-radius:4px;'>{token}</span> "
+                # ambil entitas tanpa prefix "B-" atau "I-"
+                ent_type = label.split("-")[-1]
+                color = colors.get(ent_type, "#E0E0E0")
+                html_text += f"<span style='background-color:{color}; padding:2px 5px; border-radius:4px;'>{token} <sub>({label})</sub></span> "
             else:
                 html_text += f"{token} "
+
         st.markdown(html_text, unsafe_allow_html=True)
 
 st.markdown("---")
 st.caption("🧠 Model: BiLSTM + CBOW | Dibuat untuk analisis teks hukum Indonesia 🇮🇩")
+
