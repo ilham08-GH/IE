@@ -1,34 +1,44 @@
 # ==============================================================
 # ⚖️ Named Entity Recognition (NER) Hukum — BiLSTM + CBOW
-# Didesain untuk Streamlit dengan auto-deteksi input shape model
 # ==============================================================
 import streamlit as st
 import numpy as np
 import pickle
+import os
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-import os
+from gensim.models import Word2Vec
 
 # ==============================================================
-# 🔹 LOAD MODEL & TOKENIZER
+# 🔹 LOAD MODEL, TOKENIZER, DAN CBOW EMBEDDING
 # ==============================================================
 
 @st.cache_resource
 def load_assets():
-    """Memuat model BiLSTM dan tokenizer"""
+    """Memuat model BiLSTM, tokenizer, dan model CBOW"""
     model = load_model("ner_bilstm_cbow.keras")
+
+    # Load tokenizer
     with open("tokenizer_ner.pkl", "rb") as f:
         tokenizer = pickle.load(f)
-    return model, tokenizer
 
-model, tokenizer = load_assets()
+    # Load CBOW (harus ada, karena input shape 3D)
+    if os.path.exists("cbow_embedding.model"):
+        w2v = Word2Vec.load("cbow_embedding.model")
+    else:
+        st.error("❌ File cbow_embedding.model tidak ditemukan! Pastikan file ada di folder yang sama.")
+        w2v = None
+
+    return model, tokenizer, w2v
+
+model, tokenizer, w2v = load_assets()
 
 # ==============================================================
 # 🔹 KONFIGURASI DASAR
 # ==============================================================
 
 MAX_LEN = 100
-EMBED_DIM = 10  # jika model pakai CBOW embedding manual
+EMBED_DIM = 10  # harus sama dengan embedding_dim model kamu
 label_map = {
     0: "O",
     1: "PERSON",
@@ -37,51 +47,32 @@ label_map = {
     4: "ACTION"
 }
 
-# tampilkan info model
-st.sidebar.subheader("🧠 Informasi Model")
-st.sidebar.write("Input shape model:", model.input_shape)
-
 # ==============================================================
-# 🔹 LOAD CBOW MODEL (jika dibutuhkan)
-# ==============================================================
-
-# opsional: load CBOW model kalau input 3D
-w2v = None
-if len(model.input_shape) == 3:
-    from gensim.models import Word2Vec
-    if os.path.exists("cbow_embedding.model"):
-        w2v = Word2Vec.load("cbow_embedding.model")
-        st.sidebar.success("CBOW embedding ditemukan.")
-    else:
-        st.sidebar.warning("⚠️ cbow_embedding.model tidak ditemukan. Model mungkin gagal prediksi.")
-
-# ==============================================================
-# 🔹 PREPROCESS TEKS
+# 🔹 PREPROCESS TEKS DENGAN CBOW
 # ==============================================================
 
 def preprocess_text(text):
+    """
+    Mengubah teks menjadi urutan embedding vektor menggunakan CBOW Word2Vec.
+    Hasil shape: (1, MAX_LEN, EMBED_DIM)
+    """
     text = text.lower().strip()
     words = text.split()
+    seq = []
 
-    # ===== Jika model butuh input 2D =====
-    if len(model.input_shape) == 2 or model.input_shape[-1] is None:
-        seq = tokenizer.texts_to_sequences([text])
-        padded = pad_sequences(seq, maxlen=MAX_LEN, padding='post')
-        return padded
-
-    # ===== Jika model butuh input 3D =====
-    elif len(model.input_shape) == 3:
-        seq = []
-        for w in words:
-            if w2v and w in w2v.wv:
-                seq.append(w2v.wv[w])
-            else:
-                seq.append(np.zeros(EMBED_DIM))
-        if len(seq) < MAX_LEN:
-            seq += [np.zeros(EMBED_DIM)] * (MAX_LEN - len(seq))
+    for w in words:
+        if w2v and w in w2v.wv:
+            seq.append(w2v.wv[w])
         else:
-            seq = seq[:MAX_LEN]
-        return np.array([seq])
+            seq.append(np.zeros(EMBED_DIM))  # kata tak dikenal
+
+    # Padding / truncate agar panjang tetap MAX_LEN
+    if len(seq) < MAX_LEN:
+        seq += [np.zeros(EMBED_DIM)] * (MAX_LEN - len(seq))
+    else:
+        seq = seq[:MAX_LEN]
+
+    return np.array([seq])  # shape (1, MAX_LEN, EMBED_DIM)
 
 # ==============================================================
 # 🔹 PREDIKSI ENTITAS
@@ -93,7 +84,7 @@ def predict_entities(text):
 
     try:
         seq = preprocess_text(text)
-        preds = model.predict(seq)[0]
+        preds = model.predict(seq)[0]  # hasil shape (MAX_LEN, n_labels)
         tokens = text.split()
         results = []
 
@@ -110,15 +101,19 @@ def predict_entities(text):
 # 🔹 STREAMLIT UI
 # ==============================================================
 
-st.set_page_config(page_title="NER Hukum BiLSTM", page_icon="⚖️", layout="centered")
+st.set_page_config(page_title="NER Hukum BiLSTM+CBOW", page_icon="⚖️", layout="centered")
 
 st.title("⚖️ Named Entity Recognition (NER) Hukum Indonesia")
 st.markdown(
     """
     Model **BiLSTM + CBOW** untuk mendeteksi entitas dalam teks hukum berbahasa Indonesia 🇮🇩  
-    Jalankan dengan mengetik teks hukum di bawah, lalu klik tombol **Prediksi Entitas**.
+    Pastikan file `cbow_embedding.model`, `ner_bilstm_cbow.keras`, dan `tokenizer_ner.pkl` ada di folder yang sama.
     """
 )
+
+st.sidebar.subheader("🧠 Info Model")
+st.sidebar.write("Input shape model:", model.input_shape)
+st.sidebar.write("Embedding dimensi:", EMBED_DIM)
 
 text_input = st.text_area(
     "Masukkan teks hukum di sini:",
@@ -147,4 +142,4 @@ if st.button("🔍 Prediksi Entitas"):
         st.markdown(html_text, unsafe_allow_html=True)
 
 st.markdown("---")
-st.caption("🧠 Model: BiLSTM + CBOW | Dibuat untuk analisis teks hukum Indonesia")
+st.caption("🧠 Model: BiLSTM + CBOW | Dibuat untuk analisis teks hukum Indonesia 🇮🇩")
